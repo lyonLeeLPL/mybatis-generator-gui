@@ -140,15 +140,48 @@ public class DbUtil {
         return connection;
     }
 
-    public static List<String> getTableNames(DatabaseConfig config, String filter) throws Exception {
+	public static boolean isOldVersion(Connection connection) throws SQLException {
+		try (Statement stmt = connection.createStatement();
+			 ResultSet rs = stmt.executeQuery("SELECT @@VERSION")) {
+	
+			if (rs.next()) {
+				String versionString = rs.getString(1);
+				// 提取版本号
+				int majorVersion = extractMajorVersion(versionString);
+	
+				// 假设我们将SQL Server 2005（版本9）及以下视为"旧版本"
+				return majorVersion <= 9;
+			}
+		}
+		return false; // 如果无法获取版本信息，默认不是旧版本
+	}
+	
+	private static int extractMajorVersion(String versionString) {
+		// 版本字符串通常以 "Microsoft SQL Server XXXX" 开头
+		String[] parts = versionString.split(" ");
+		for (String part : parts) {
+			if (part.matches("\\d+\\.\\d+\\.\\d+\\.\\d+")) {
+				return Integer.parseInt(part.split("\\.")[0]);
+			}
+		}
+		return 0; // 无法解析版本号
+	}
+	
+	public static List<String> getTableNames(DatabaseConfig config, String filter) throws Exception {
 		Session sshSession = getSSHSession(config);
 		engagePortForwarding(sshSession, config);
 		try (Connection connection = getConnection(config)) {
 			List<String> tables = new ArrayList<>();
 			DatabaseMetaData md = connection.getMetaData();
 			ResultSet rs;
+			String sql;
 			if (DbType.valueOf(config.getDbType()) == DbType.SQL_Server) {
-				String sql = "select name from sysobjects  where xtype='u' or xtype='v' order by name";
+				boolean oldVersion = isOldVersion(connection);
+				if (oldVersion){
+					sql = "select name from sysobjects  where xtype='u' or xtype='v' order by name";
+				}else {
+					sql = "SELECT name　FROM sys.tables order by name";
+				}
 				rs = connection.createStatement().executeQuery(sql);
 				while (rs.next()) {
 					tables.add(rs.getString("name"));
@@ -156,7 +189,7 @@ public class DbUtil {
 			} else if (DbType.valueOf(config.getDbType()) == DbType.Oracle) {
 				rs = md.getTables(null, config.getUsername().toUpperCase(), null, new String[]{"TABLE", "VIEW"});
 			} else if (DbType.valueOf(config.getDbType()) == DbType.Sqlite) {
-				String sql = "Select name from sqlite_master;";
+				sql = "Select name from sqlite_master;";
 				rs = connection.createStatement().executeQuery(sql);
 				while (rs.next()) {
 					tables.add(rs.getString("name"));
